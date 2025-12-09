@@ -1,0 +1,295 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Snake — Single File Web Game</title>
+  <style>
+    :root{--bg:#0b1220;--panel:#0f1724;--accent:#22c1c3;--danger:#ff6b6b;--muted:#9aa4b2}
+    html,body{height:100%;margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial; background:var(--bg); color:#e6eef6}
+    .wrap{min-height:100%;display:flex;align-items:center;justify-content:center;padding:28px;box-sizing:border-box}
+    .card{width:100%;max-width:880px;background:linear-gradient(180deg, rgba(255,255,255,0.02), transparent);border-radius:14px;padding:18px;box-shadow:0 8px 30px rgba(2,6,23,0.7);}
+    .top{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px}
+    .title{font-weight:700;font-size:18px}
+    .meta{color:var(--muted);font-size:13px}
+    .game-area{display:flex;gap:18px;align-items:flex-start}
+    #gameCanvas{position:relative; z-index:0;background:linear-gradient(180deg,#06111a,#04101a);border-radius:8px;display:block;touch-action:none}
+    .sidebar{position:relative; z-index:1;{min-width:180px;color:var(--muted)}}
+    .score{font-size:20px;font-weight:700;color:var(--accent)}
+    .btn{display:inline-block;padding:8px 12px;border-radius:8px;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.03);cursor:pointer;margin-top:8px}
+    .controls{display:flex;flex-direction:column;gap:8px;margin-top:12px}
+    .kbd{background:#0b1220;padding:6px 8px;border-radius:6px;color:var(--muted);font-size:13px}
+    .mobile-controls{display:none;margin-top:12px}
+    .dpad{display:grid;grid-template-columns:repeat(3,60px);grid-template-rows:repeat(3,60px);gap:8px;justify-content:center}
+    .dpad button{width:60px;height:60px;border-radius:8px;border:none;background:rgba(255,255,255,0.04);font-size:18px}
+    @media (max-width:720px){
+      .game-area{flex-direction:column;align-items:center}
+      .sidebar{width:100%;display:flex;justify-content:space-between;align-items:center}
+      .mobile-controls{display:block}
+    }
+    .footer{margin-top:12px;color:var(--muted);font-size:13px}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <div class="top">
+        <div>
+          <div class="title">Snake — HTML5 Canvas</div>
+          <div class="meta">Use arrow keys or WASD. Tap mobile controls on phones.</div>
+        </div>
+        <div class="meta">Single-file demo • Local high score</div>
+      </div>
+
+      <div class="game-area">
+        <canvas id="gameCanvas" width="640" height="640"></canvas>
+
+        <div class="sidebar">
+          <div>Score</div>
+          <div class="score" id="score">0</div>
+          <div style="height:8px"></div>
+          <div>High Score</div>
+          <div class="kbd" id="highscore">0</div>
+
+          <div class="controls">
+            <button class="btn" id="startBtn">Start / Restart</button>
+            <button class="btn" id="pauseBtn">Pause / Resume (Space)</button>
+            <label class="kbd">Speed: <input id="speedRange" type="range" min="4" max="20" value="10" /></label>
+          </div>
+
+          <div class="footer">
+            Controls: ↑ ↓ ← → or W A S D<br>
+            Mobile: use the D-Pad below
+          </div>
+
+          <div class="mobile-controls" id="mobileControls">
+            <div class="dpad">
+              <div></div><button data-dir="up">▲</button><div></div>
+              <button data-dir="left">◀</button><button data-dir="down">▼</button><button data-dir="right">▶</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <script>
+  // --- Config ---
+  const canvas = document.getElementById('gameCanvas');
+  const ctx = canvas.getContext('2d');
+  const scoreEl = document.getElementById('score');
+  const hsEl = document.getElementById('highscore');
+  const startBtn = document.getElementById('startBtn');
+  const pauseBtn = document.getElementById('pauseBtn');
+  const speedRange = document.getElementById('speedRange');
+  const mobileControls = document.getElementById('mobileControls');
+
+  // Game state
+  let cellSize = 20; // pixels per grid cell
+  let cols, rows;
+  let snake;
+  let apple;
+  let dir;
+  let nextDir;
+  let score = 0;
+  let highscore = Number(localStorage.getItem('snake_highscore') || 0);
+  let running = false;
+  let paused = false;
+  let tickInterval = 1000 / Number(speedRange.value); // calculated later
+  let timerId = null;
+
+  hsEl.textContent = highscore;
+
+  function resizeCanvas(){
+    // Keep square canvas; adapt cellSize for responsiveness
+    const rect = canvas.getBoundingClientRect();
+    const size = Math.min(window.innerWidth - 64, 720);
+    canvas.width = size;
+    canvas.height = size;
+    // choose cell size so we have integer grid
+    cellSize = Math.max(12, Math.floor(canvas.width / 32));
+    cols = Math.floor(canvas.width / cellSize);
+    rows = Math.floor(canvas.height / cellSize);
+    // ensure canvas fits exact grid
+    canvas.width = cols * cellSize;
+    canvas.height = rows * cellSize;
+    draw();
+  }
+
+  window.addEventListener('resize', resizeCanvas);
+  resizeCanvas();
+
+  function newGame(){
+    const startLen = 4;
+    snake = [];
+    const startX = Math.floor(cols/2);
+    const startY = Math.floor(rows/2);
+    for(let i=0;i<startLen;i++) snake.push({x:startX-i,y:startY});
+    dir = {x:1,y:0};
+    nextDir = {...dir};
+    placeApple();
+    score = 0;
+    running = true;
+    paused = false;
+    scoreEl.textContent = score;
+    restartLoop();
+  }
+
+  function placeApple(){
+    while(true){
+      const ax = Math.floor(Math.random()*cols);
+      const ay = Math.floor(Math.random()*rows);
+      if(!snake.some(s=>s.x===ax && s.y===ay)){
+        apple = {x:ax,y:ay};
+        return;
+      }
+    }
+  }
+
+  function step(){
+    if(!running || paused) return;
+    // update direction
+    if((nextDir.x !== -dir.x || nextDir.y !== -dir.y)) dir = nextDir;
+    const head = {x:snake[0].x + dir.x, y:snake[0].y + dir.y};
+    // wrap around
+    head.x = (head.x + cols) % cols;
+    head.y = (head.y + rows) % rows;
+    // collision with self?
+    if(snake.some((s,i)=>i>0 && s.x===head.x && s.y===head.y)){
+      gameOver();
+      return;
+    }
+    snake.unshift(head);
+    // apple?
+    if(head.x===apple.x && head.y===apple.y){
+      score+=1;
+      scoreEl.textContent = score;
+      placeApple();
+    } else {
+      snake.pop();
+    }
+    draw();
+  }
+
+  function gameOver(){
+    running = false;
+    paused = false;
+    clearInterval(timerId);
+    timerId = null;
+    if(score > highscore){
+      highscore = score;
+      localStorage.setItem('snake_highscore', highscore);
+      hsEl.textContent = highscore;
+      setTimeout(()=>alert('Game over! New high score: ' + highscore), 50);
+    } else {
+      setTimeout(()=>alert('Game over! Score: ' + score), 50);
+    }
+  }
+
+  function draw(){
+    // background
+    ctx.fillStyle = '#04141a';
+    ctx.fillRect(0,0,canvas.width,canvas.height);
+
+    // draw grid subtly
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = 'rgba(255,255,255,0.02)';
+    for(let x=0;x<=cols;x++){
+      ctx.beginPath();ctx.moveTo(x*cellSize,0);ctx.lineTo(x*cellSize,canvas.height);ctx.stroke();
+    }
+    for(let y=0;y<=rows;y++){
+      ctx.beginPath();ctx.moveTo(0,y*cellSize);ctx.lineTo(canvas.width,y*cellSize);ctx.stroke();
+    }
+
+    // draw apple
+    if(apple){
+      ctx.fillStyle = '#ff4d4d';
+      roundRect(ctx, apple.x*cellSize + 2, apple.y*cellSize + 2, cellSize-4, cellSize-4, 6);
+      ctx.fill();
+    }
+
+    // draw snake
+    for(let i=snake.length-1;i>=0;i--){
+      const s = snake[i];
+      const px = s.x*cellSize;
+      const py = s.y*cellSize;
+      if(i===0){
+        // head
+        ctx.fillStyle = '#22c1c3';
+        roundRect(ctx, px+1, py+1, cellSize-2, cellSize-2, 6);
+        ctx.fill();
+      } else {
+        ctx.fillStyle = '#18a6a8';
+        roundRect(ctx, px+1, py+1, cellSize-2, cellSize-2, 5);
+        ctx.fill();
+      }
+    }
+  }
+
+  function roundRect(ctx,x,y,w,h,r){
+    const radius = Math.min(r, w/2, h/2);
+    ctx.beginPath();
+    ctx.moveTo(x+radius, y);
+    ctx.arcTo(x+w, y, x+w, y+h, radius);
+    ctx.arcTo(x+w, y+h, x, y+h, radius);
+    ctx.arcTo(x, y+h, x, y, radius);
+    ctx.arcTo(x, y, x+w, y, radius);
+    ctx.closePath();
+  }
+
+  // Input
+  window.addEventListener('keydown', (e)=>{
+    const key = e.key.toLowerCase();
+    if(key==='arrowup' || key==='w') nextDir = {x:0,y:-1};
+    if(key==='arrowdown' || key==='s') nextDir = {x:0,y:1};
+    if(key==='arrowleft' || key==='a') nextDir = {x:-1,y:0};
+    if(key==='arrowright' || key==='d') nextDir = {x:1,y:0};
+    if(e.code === 'Space'){
+      e.preventDefault(); togglePause();
+    }
+  });
+
+  // mobile buttons
+  mobileControls.querySelectorAll('button').forEach(b=>{
+    b.addEventListener('touchstart', (ev)=>{ev.preventDefault(); handleDir(b.dataset.dir);});
+    b.addEventListener('mousedown', ()=>handleDir(b.dataset.dir));
+  });
+  function handleDir(d){
+    if(d==='up') nextDir={x:0,y:-1};
+    if(d==='down') nextDir={x:0,y:1};
+    if(d==='left') nextDir={x:-1,y:0};
+    if(d==='right') nextDir={x:1,y:0};
+  }
+
+  startBtn.addEventListener('click', ()=>{ newGame(); });
+  pauseBtn.addEventListener('click', ()=>{ togglePause(); });
+  speedRange.addEventListener('input', ()=>{ restartLoop(); });
+
+  function restartLoop(){
+    if(timerId) clearInterval(timerId);
+    const speed = Number(speedRange.value); // 4..20 maps to ticks per second
+    const tps = Math.max(4, speed);
+    const ms = Math.floor(1000 / tps);
+    tickInterval = ms;
+    if(running && !paused){
+      timerId = setInterval(step, tickInterval);
+    }
+  }
+
+  function togglePause(){
+    if(!running) return;
+    paused = !paused;
+    if(paused){
+      if(timerId) clearInterval(timerId);
+      timerId = null;
+    } else {
+      timerId = setInterval(step, tickInterval);
+    }
+  }
+
+  // start automatically
+  newGame();
+  </script>
+</body>
+</html>
